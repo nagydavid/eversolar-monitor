@@ -56,6 +56,9 @@ sudo apt-get install libdevice-serialport-perl
 #Serial ports have a tencency to hang the RPI inless you update it
 sudo apt-get install ca-certificates
 
+# For Mqtt abilities, you need to install:
+
+sudo apt install -y mosquitto mosquitto-clients
 
 # Removed 2021: sudo rpi-update as the software directly advises against use
 # reboot
