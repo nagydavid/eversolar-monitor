@@ -187,6 +187,10 @@ if ( $config->configFile eq '' ) {
 $config->file( $config->configFile );
 pmu_log( "Severity 1, Configfile is: " . $config->configFile );
 
+# Introduce a static variable to check if it's the first run
+my $first_run = 1;
+
+
 %CTRL_FUNC_CODES = (
     "REGISTER" => {    # CONTROL CODE 0x10
         "OFFLINE_QUERY" => {
@@ -1425,9 +1429,6 @@ while (42) {
                     my %config_hash = @_;
                     return encode_json \%config_hash;
                 }
-
-                # Introduce a static variable to check if it's the first run
-                my $first_run = 1;
 
                 # Only publish configuration on first run
                 if ($first_run) {
