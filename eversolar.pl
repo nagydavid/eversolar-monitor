@@ -1438,7 +1438,7 @@ while (42) {
                             $cmd = `mosquitto_pub -h $mqtt_host -p $mqtt_port -u "$mqtt_user" -P "$mqtt_password" -q 0 -t 'homeassistant/sensor/$mqtt_topic_prefix/$mqtt_serial\_$k/config' -m '$config_send'`;
                             chomp $cmd;
                             sleep 0.5;
-                            pmu_log("Severity 3: MQTT $k's HA configuration is published");
+                            pmu_log("Severity 3: MQTT ${k}'s HA configuration is published");
                         }
                     }
                     $first_run = 0;
@@ -1458,7 +1458,7 @@ while (42) {
                     $cmd = `mosquitto_pub -h $mqtt_host -p $mqtt_port -u "$mqtt_user" -P "$mqtt_password" -q 1 -t '$mqtt_topic_prefix/$mqtt_serial/$k' -m '$v'`;
                     chomp $cmd;
                     sleep 0.5;
-                    pmu_log("Severity 3: MQTT $k = $v is published");
+                    pmu_log("Severity 3: MQTT ${k} = ${v} is published");
                 }
 
                 pmu_log("Severity 3: MQTT messages published");
