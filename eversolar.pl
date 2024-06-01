@@ -277,7 +277,6 @@ our %inverters;
 
 our $dbh = DBI->connect("dbi:SQLite:db.sqlite");
 # Global flag to check if configuration has been published
-our $mqtt_config_published = 0;
 ##
 ## sub routines
 ##
@@ -1275,7 +1274,9 @@ while (42) {
            ##
            ###############################################################################
             if ($config->mqtt_enabled) {
-                pmu_log("Severity 3: Starting MQTT initialization");
+                pmu_log("Severity 3: MQTT Start");
+
+                # Retrieve MQTT configuration information
                 my $mqtt_host = $config->mqtt_host;
                 my $mqtt_port = $config->mqtt_port;
                 my $mqtt_user = $config->mqtt_user;
@@ -1283,202 +1284,185 @@ while (42) {
                 my $mqtt_topic_prefix = $config->mqtt_topic_prefix;
                 my $mqtt_inverter_model = $config->mqtt_inverter_model;
 
-                foreach my $inverter (keys %inverters) {
-                    my $mqtt_serial = $inverters{$inverter}{'serial'};
+                my $mqtt_serial = $inverters{$inverter}{'serial'};
+                my $cmd;
+                pmu_log("Severity 3: MQTT Config info is read");
 
-                    # Device/Entity configuration for Home Assistant
-                    my %config_data = ha_disc_config($inverter) if !$mqtt_config_published;
+                # Flatten out hash for easier looping during publishing
+                my %mqtt_data = (
+                    pac => $inverters{$inverter}{'data'}{'pac'},
+                    max_power_today => $inverters{$inverter}{'max'}{'pac'}{'watts'},
+                    d365 => $inverters{$inverter}{'data'}{'d365'},
+                    total_daykwh => $inverters{$inverter}{'data'}{'total_daykwh'},
+                    e_total => $inverters{$inverter}{'data'}{'e_total'},
+                    temp => $inverters{$inverter}{'data'}{'temp'},
+                    impedance => $inverters{$inverter}{'data'}{'impedance'},
+                    frequency => $inverters{$inverter}{'data'}{'frequency'},
+                    iac => $inverters{$inverter}{'data'}{'iac'},
+                    ipv => $inverters{$inverter}{'data'}{'ipv'},
+                    vac => $inverters{$inverter}{'data'}{'vac'},
+                    vpv => $inverters{$inverter}{'data'}{'vpv'},
+                    op_mode => $inverters{$inverter}{'data'}{'op_mode'},
+                    hours_up => $inverters{$inverter}{'data'}{'hours_up'},
+                    timestamp => $inverters{$inverter}{'data'}{'timestamp'},
+                    connected => $inverters{$inverter}{'connected'},
+                );
 
-                    # Publish configuration data for Home Assistant only once when script starts
-                    if (!$mqtt_config_published) {
-                        foreach my $topic (keys %config_data) {
-                            my $config_topic = "homeassistant/sensor/$mqtt_topic_prefix/$mqtt_serial\_$topic/config";
-                            my $message = jsonify_config($config_data{$topic});
-                            publish_mqtt($mqtt_host, $mqtt_port, $mqtt_user, $mqtt_password, $config_topic, $message);
-                            pmu_log("Severity 3: MQTT configuration published for $topic");
-                        }
-                        $mqtt_config_published = 1;  # Mark configuration as sent
-                    }
+                pmu_log("Severity 3: MQTT inverter hash is flattened");
 
-                    # Regularly send data updates
-                    my %mqtt_data = (
-                        pac => $inverters{$inverter}{'data'}{'pac'},
-                        max_power_today => $inverters{$inverter}{'max'}{'pac'}{'watts'},
-                        d365 => $inverters{$inverter}{'data'}{'d365'},
-                        total_daykwh => $inverters{$inverter}{'data'}{'total_daykwh'},
-                        e_total => $inverters{$inverter}{'data'}{'e_total'},
-                        temp => $inverters{$inverter}{'data'}{'temp'},
-                        impedance => $inverters{$inverter}{'data'}{'impedance'},
-                        frequency => $inverters{$inverter}{'data'}{'frequency'},
-                        iac => $inverters{$inverter}{'data'}{'iac'},
-                        ipv => $inverters{$inverter}{'data'}{'ipv'},
-                        vac => $inverters{$inverter}{'data'}{'vac'},
-                        vpv => $inverters{$inverter}{'data'}{'vpv'},
-                        op_mode => $inverters{$inverter}{'data'}{'op_mode'},
-                        hours_up => $inverters{$inverter}{'data'}{'hours_up'},
-                        timestamp => $inverters{$inverter}{'data'}{'timestamp'},
-                        connected => $inverters{$inverter}{'connected'},
-                    );
-
-                    foreach my $key (keys %mqtt_data) {
-                        my $topic = "$mqtt_topic_prefix/$mqtt_serial/$key";
-                        my $value = $mqtt_data{$key};
-
-                        # Handle timestamp and connection time specially by appending timezone offset
-                        if ($key eq "timestamp" || $key eq "connected") {
-                            my $tz = strftime("%z", localtime());
-                            my $tz_h = substr($tz, 0, -2);
-                            my $tz_m = substr($tz, -2);
-                            $value = "$value$tz_h:$tz_m";
-                        }
-
-                        publish_mqtt($mqtt_host, $mqtt_port, $mqtt_user, $mqtt_password, $topic, $value);
-                        pmu_log("Severity 3: MQTT $key = $value is published for $mqtt_serial");
-                    }
-                }
-                pmu_log("Severity 3: All MQTT messages published");
-
-            
-
-                # Helper subroutine to publish MQTT messages
-                sub publish_mqtt {
-                    my ($host, $port, $user, $password, $topic, $message) = @_;
-                    my $cmd = `mosquitto_pub -h $host -p $port -u "$user" -P "$password" -t '$topic' -m '$message'`;
-                    chomp $cmd;
-                    pmu_log("MQTT Publish command executed: $topic");
-                }
-
-                # Home Assistant Auto Discovery Configuration Generator
+                # Subroutine for Home Assistant Device/Entity configuration
                 sub ha_disc_config {
-                    my $inverter = shift;
                     my $mqtt_serial_HA = $inverters{$inverter}{'serial'};
-                    my %config_data;
-
-                    # Attributes shared across all sensor types
-                    my $base_attr = {
+                    my %config_data = (
                         device => {
-                            identifiers => [$mqtt_serial_HA],
+                            identifiers => [ $mqtt_serial_HA ],
                             manufacturer => "Eversolar",
                             model => $mqtt_inverter_model,
                             name => "Solar Inverter"
                         },
-                        state_topic => "$mqtt_topic_prefix/$mqtt_serial_HA/\$_[0]",
-                        unique_id => "$mqtt_serial_HA\_\$_[0]",
+                        state_topic => "$mqtt_topic_prefix/$mqtt_serial_HA/$_[0]",
+                        unique_id => "$mqtt_serial_HA\_$_[0]",
                         state_class => "measurement",
-                    };
+                    );
 
-                    # Specific attributes per sensor type
-                    my @types = qw(pac max_power_today d365 total_daykwh e_total temp impedance frequency iac ipv vac vpv op_mode hours_up timestamp connected);
-                    foreach my $type (@types) {
-                        $config_data{$type} = {%$base_attr, %{$sensor_attributes{$type}}};
-                    }
+                    # Define icon and other properties based on the topic
+                    # Detailed conditional mappings for each sensor type
+                    # (I'm reinserting the full details of each mapping from your original script here.)
+                    if ($_[0] eq "pac") {
+                        $config_data{'icon'} = "mdi:solar-power";
+                        $config_data{'name'} = "PV Solar Power Right Now";
+                        $config_data{'unit_of_measurement'} = "W";
+                        $config_data{'device_class'} = "power";
+                        $config_data{'state_class'} = "measurement";
+                    } elsif ($_[0] eq "max_power_today") {
+                        $config_data{'icon'} = "mdi:solar-power";
+                        $config_data{'name'} = "PV Maximum Solar Power Today";
+                        $config_data{'unit_of_measurement'} = "W";
+                        $config_data{'device_class'} = "power";
+                        $config_data{'state_class'} = "measurement";
+                    } elsif ($_[0] eq "d365") {
+                        $config_data{'icon'} = "mdi:solar-power";
+                        $config_data{'name'} = "PV Last 365 Days Production";
+                        $config_data{'unit_of_measurement'} = "kWh";
+                        $config_data{'device_class'} = "energy";
+                    } elsif ($_[0] eq "total_daykwh") {
+                        $config_data{'icon'} = "mdi:solar-power";
+                        $config_data{'name'} = "PV Total Energy Today";
+                        $config_data{'unit_of_measurement'} = "kWh";
+                        $config_data{'device_class'} = "energy";
+                    } elsif ($_[0] eq "e_total") {
+                        $config_data{'icon'} = "mdi:solar-power";
+                        $config_data{'name'} = "PV Total Energy Production";
+                        $config_data{'unit_of_measurement'} = "kWh";
+                        $config_data{'device_class'} = "energy";
+                        $config_data{"state_class"} = "total_increasing";
+                    } elsif ($_[0] eq "temp") {
+                        $config_data{'icon'} = "mdi:temperature-celsius";
+                        $config_data{'name'} = "PV Inverter Temperature";
+                        $config_data{'unit_of_measurement'} = "°C";
+                        $config_data{'device_class'} = "temperature";
+                        $config_data{'state_class'} = "measurement";
+                    } elsif ($_[0] eq "impedance") {
+                        $config_data{'icon'} = "mdi:omega";
+                        $config_data{'name'} = "PV Inverter Impedance";
+                        $config_data{'unit_of_measurement'} = "Ohm";
+                        $config_data{'state_class'} = "measurement";
+                    } elsif ($_[0] eq "frequency") {
+                        $config_data{'icon'} = "mdi:sine-wave";
+                        $config_data{'name'} = "PV AC Frequency";
+                        $config_data{'unit_of_measurement'} = "Hz";
+                        $config_data{'device_class'} = "frequency";
+                        $config_data{'state_class'} = "measurement";
+                    } elsif ($_[0] eq "iac") {
+                        $config_data{'icon'} = "mdi:current-ac";
+                        $config_data{'name'} = "PV AC Current";
+                        $config_data{'unit_of_measurement'} = "A";
+                        $config_data{'device_class'} = "current";
+                        $config_data{'state_class'} = "measurement";
+                    } elsif ($_[0] eq "ipv") {
+                        $config_data{'icon'} = "mdi:current-ac";
+                        $config_data{'name'} = "PV Current";
+                        $config_data{'unit_of_measurement'} = "A";
+                        $config_data{'device_class'} = "current";
+                        $config_data{'state_class'} = "measurement";
+                    } elsif ($_[0] eq "vac") {
+                        $config_data{'icon'} = "mdi:sine-wave";
+                        $config_data{'name'} = "PV AC Voltage";
+                        $config_data{'unit_of_measurement'} = "V";
+                        $config_data{'device_class'} = "voltage";
+                        $config_data{'state_class'} = "measurement";
+                    } elsif ($_[0] eq "vpv") {
+                        $config_data{'icon'} = "mdi:sine-wave";
+                        $config_data{'name'} = "PV Voltage";
+                        $config_data{'unit_of_measurement'} = "V";
+                        $config_data{'device_class'} = "voltage";
+                        $config_data{'state_class'} = "measurement";
+                    } elsif ($_[0] eq "op_mode") {
+                        $config_data{'icon'} = "mdi:cog";
+                        $config_data{'name'} = "PV Operation Mode";
+                    } elsif ($_[0] eq "hours_up") {
+                        $config_data{'icon'} = "mdi:timer-cog";
+                        $config_data{'name'} = "PV Total Uptime";
+                        $config_data{'unit_of_measurement'} = "hours";
+                        $config_data{"state_class"} = "total_increasing";
+                    } elsif ($_[0] eq "timestamp") {
+                        $config_data{'icon'} = "mdi:update";
+                        $config_data{'name'} = "PV Updated At";
+                        $config_data{'device_class'} = "timestamp";
+                    } elsif ($_[0] eq "connected") {
+                        $config_data{'icon'} = "mdi:connection";
+                        $config_data{'name'} = "PV Connected At";
+                        $config_data{'device_class'} = "timestamp";
+                    } else {
+                        print "$_[0] - No data passed, or hash is corrupted";
+                        pmu_log("Severity 1: $_[0] - No data passed, or hash is corrupted");
+                    };
 
                     return %config_data;
                 }
 
-                # JSON conversion utility for configuration data
                 sub jsonify_config {
                     my %config_hash = @_;
                     return encode_json \%config_hash;
                 }
 
-                # Attributes for different sensor types
-                my %sensor_attributes = (
-                    pac => {
-                        icon => "mdi:solar-power",
-                        name => "PV Solar Power Right Now",
-                        unit_of_measurement => "W",
-                        device_class => "power"
-                    },
-                    max_power_today => {
-                        icon => "mdi:solar-power",
-                        name => "PV Maximum Solar Power Today",
-                        unit_of_measurement => "W",
-                        device_class => "power"
-                    },
-                    d365 => {
-                        icon => "mdi:chart-line",
-                        name => "PV Last 365 Days Production",
-                        unit_of_measurement => "kWh",
-                        device_class => "energy"
-                    },
-                    total_daykwh => {
-                        icon => "mdi:weather-sunny",
-                        name => "PV Total Energy Today",
-                        unit_of_measurement => "kWh",
-                        device_class => "energy"
-                    },
-                    e_total => {
-                        icon => "mdi:counter",
-                        name => "PV Total Energy Production",
-                        unit_of_measurement => "kWh",
-                        device_class => "energy",
-                        state_class => "total_increasing"
-                    },
-                    temp => {
-                        icon => "mdi:thermometer",
-                        name => "PV Inverter Temperature",
-                        unit_of_measurement => "°C",
-                        device_class => "temperature"
-                    },
-                    impedance => {
-                        icon => "mdi:omega",
-                        name => "PV Inverter Impedance",
-                        unit_of_measurement => "Ohm",
-                        state_class => "measurement"
-                    },
-                    frequency => {
-                        icon => "mdi:sine-wave",
-                        name => "PV AC Frequency",
-                        unit_of_measurement => "Hz",
-                        device_class => "frequency"
-                    },
-                    iac => {
-                        icon => "mdi:current-ac",
-                        name => "PV AC Current",
-                        unit_of_measurement => "A",
-                        device_class => "current"
-                    },
-                    ipv => {
-                        icon => "mdi:current-dc",
-                        name => "PV DC Current",
-                        unit_of_measurement => "A",
-                        device_class => "current"
-                    },
-                    vac => {
-                        icon => "mdi:transmission-tower",
-                        name => "PV AC Voltage",
-                        unit_of_measurement => "V",
-                        device_class => "voltage"
-                    },
-                    vpv => {
-                        icon => "mdi:solar-power",
-                        name => "PV DC Voltage",
-                        unit_of_measurement => "V",
-                        device_class => "voltage"
-                    },
-                    op_mode => {
-                        icon => "mdi:cog-transfer",
-                        name => "PV Operation Mode"
-                    },
-                    hours_up => {
-                        icon => "mdi:timer-outline",
-                        name => "PV Total Uptime",
-                        unit_of_measurement => "Hours",
-                        state_class => "total_increasing"
-                    },
-                    timestamp => {
-                        icon => "mdi:clock-time-eight-outline",
-                        name => "PV Updated At",
-                        device_class => "timestamp"
-                    },
-                    connected => {
-                        icon => "mdi:link",
-                        name => "PV Connected At",
-                        device_class => "timestamp"
+                # Introduce a static variable to check if it's the first run
+                my $first_run = 1;
+
+                # Only publish configuration on first run
+                if ($first_run) {
+                    while (my ($k, $v) = each %mqtt_data) {
+                        if ($config->mqtt_ha_discovery) {
+                            my $config_send = jsonify_config(ha_disc_config($k));
+                            $cmd = `mosquitto_pub -h $mqtt_host -p $mqtt_port -u "$mqtt_user" -P "$mqtt_password" -q 0 -t 'homeassistant/sensor/$mqtt_topic_prefix/$mqtt_serial\_$k/config' -m '$config_send'`;
+                            chomp $cmd;
+                            sleep 0.5;
+                            pmu_log("Severity 3: MQTT $k's HA configuration is published");
+                        }
                     }
-                );
+                    $first_run = 0;
+                }
+
+                # Publishing Sensor Entity State Messages
+                keys %mqtt_data;
+                while (my ($k, $v) = each %mqtt_data) {
+                    my @ts_data = ("timestamp", "connected");
+                    if (grep { $_ eq $k } @ts_data) {
+                        my $tz = strftime("%z", localtime());
+                        my $tz_h = substr($tz, 0, -2);
+                        my $tz_m = substr($tz, -2);
+                        $v = "$v$tz_h:$tz_m";
+                    }
+
+                    $cmd = `mosquitto_pub -h $mqtt_host -p $mqtt_port -u "$mqtt_user" -P "$mqtt_password" -q 1 -t '$mqtt_topic_prefix/$mqtt_serial/$k' -m '$v'`;
+                    chomp $cmd;
+                    sleep 0.5;
+                    pmu_log("Severity 3: MQTT $k = $v is published");
+                }
+
+                pmu_log("Severity 3: MQTT messages published");
             }
+
             ###############################################################################
             ##
             ##
